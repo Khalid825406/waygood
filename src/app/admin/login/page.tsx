@@ -69,7 +69,7 @@ export default function AdminLoginPage() {
             </div>
             <CardTitle className="text-2xl font-headline">Admin Login</CardTitle>
             <CardDescription>Enter your credentials to access the admin dashboard.</CardDescription>
-            <p>Email : test@gmail.com </p>
+            <p>Email : test@email.com </p>
             <p>Password : Admin@123</p>
             <p>Admin Email Password manualy create security purpose</p>
           </CardHeader>

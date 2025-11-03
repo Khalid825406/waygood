@@ -4,12 +4,14 @@ import { Course } from "@/lib/models/Course";
 
 export async function GET(
   req: Request,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> } // 👈 yahan change
 ) {
   try {
+    const { id } = await context.params; // 👈 await lagao
+
     await connectDB();
 
-    const course = await Course.findOne({ uniqueId: params.id }).lean();
+    const course = await Course.findOne({ uniqueId: id }).lean();
 
     if (!course) {
       return NextResponse.json(
