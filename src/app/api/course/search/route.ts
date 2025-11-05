@@ -1,46 +1,86 @@
-import { NextResponse } from 'next/server';
-import redis from '@/lib/redis';
-import { connectDB } from '@/lib/db';
-import { Course } from '@/lib/models/Course';
+import { NextResponse } from "next/server";
+import Redis from "ioredis";
+import { Client } from "@elastic/elasticsearch";
 
-const CACHE_TTL = 60 * 10; // 10 minutes
+import type { SearchRequest } from "@/lib/types";
 
-export async function GET(req: Request) {
+const redis = new Redis(process.env.REDIS_URL!);
+
+const esClient = new Client({
+  node: process.env.ELASTIC_URL!,
+});
+
+export async function POST(req: Request) {
   try {
-    await connectDB();
+    const { keyword, university, level, tuitionRange } = await req.json();
 
-    const { searchParams } = new URL(req.url);
-    const keyword = searchParams.get('keyword') || '';
-    const university = searchParams.get('university') || 'all';
-    const level = searchParams.get('level') || 'all';
-    const maxTuition = Number(searchParams.get('maxTuition') || 50000);
+    const cacheKey =
+      `courses:${keyword ?? ""}-${university ?? ""}-${level ?? ""}-` +
+      `${Array.isArray(tuitionRange) ? tuitionRange.join("-") : ""}`;
 
-    const cacheKey = `courses:${keyword}:${university}:${level}:${maxTuition}`;
-
-    // ✅ 1. Check Redis Cache
     const cached = await redis.get(cacheKey);
     if (cached) {
-      console.log('📦 Cache HIT:', cacheKey);
-      return NextResponse.json(JSON.parse(cached));
+      return NextResponse.json({ fromCache: true, data: JSON.parse(cached) });
     }
 
-    console.log('💾 Cache MISS:', cacheKey);
+    const must: any[] = [];
+    const filter: any[] = [];
 
-    // ✅ 2. Build Query
-    const query: any = { 'tuitionFees.amount': { $lte: maxTuition } };
-    if (keyword) query.$text = { $search: keyword };
-    if (university !== 'all') query.universityName = university;
-    if (level !== 'all') query.level = level;
+    if (keyword) {
+      must.push({
+        multi_match: {
+          query: keyword,
+          fields: [
+            "name",
+            "overview",
+            "specialization",
+            "universityName",
+            "discipline",
+            "department",
+            "keywords",
+          ],
+          fuzziness: "AUTO",
+        },
+      });
+    }
 
-    // ✅ 3. Fetch from MongoDB
-    const courses = await Course.find(query).lean().limit(50);
+    if (university && university !== "all") {
+      filter.push({ term: { "universityCode.keyword": university } });
+    }
 
-    // ✅ 4. Save to Redis
-    await redis.set(cacheKey, JSON.stringify(courses), 'EX', CACHE_TTL);
+    if (level && level !== "all") {
+      filter.push({ term: { "level.keyword": level } });
+    }
 
-    return NextResponse.json(courses);
-  } catch (err) {
-    console.error('❌ Server Error:', err);
-    return NextResponse.json({ error: 'Server Error' }, { status: 500 });
+    if (Array.isArray(tuitionRange) && tuitionRange.length === 2) {
+      filter.push({
+        range: {
+          "tuitionFees.amount": {
+            gte: tuitionRange[0],
+            lte: tuitionRange[1],
+          },
+        },
+      });
+    }
+
+    // ✅ FINAL, CORRECT, STRICT ELASTICSEARCH QUERY
+    const params: SearchRequest = {
+      index: "courses",
+      size: 100,
+      query: {
+        bool: { must, filter },
+      },
+    };
+
+    const esResult = await esClient.search(params);
+
+    const data = esResult.hits.hits.map((h: any) => h._source);
+
+    await redis.set(cacheKey, JSON.stringify(data), "EX", 3600);
+
+    return NextResponse.json({ fromCache: false, data });
+  } catch (error) {
+    console.error("Search API Error:", error);
+    return NextResponse.json({ error: "Search failed" }, { status: 500 });
   }
 }

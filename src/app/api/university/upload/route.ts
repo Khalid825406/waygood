@@ -181,14 +181,3 @@ export async function POST(req: Request) {
     }, { status: 500 });
   }
 }
-
-export async function GET() {
-  try {
-    await connectDB();
-    const university = await University.find().lean();
-    return NextResponse.json(university);
-  } catch (error: any) {
-    console.error("Error fetching courses:", error);
-    return NextResponse.json({ error: "Failed to fetch courses" }, { status: 500 });
-  }
-}
